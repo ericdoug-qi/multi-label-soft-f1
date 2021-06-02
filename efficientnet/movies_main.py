@@ -33,13 +33,14 @@ import utils
 # pylint: disable=g-direct-tensorflow-import
 from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python.estimator import estimator
+import movies_input
 
 # pylint: enable=g-direct-tensorflow-import
 
 FLAGS = flags.FLAGS
 
 # FAKE_DATA_DIR = 'gs://cloud-tpu-test-datasets/fake_imagenet'
-FAKE_DATA_DIR = '../data'
+FAKE_DATA_DIR = '/Users/ericdoug/Documents/competitions/tencent/mydev/Pandora/multi-label-soft-f1/data'
 
 flags.DEFINE_bool(
     'use_tpu', default=False,
@@ -762,8 +763,30 @@ def main(unused_argv):
                 resize_method=resize_method,
                 holdout_shards=FLAGS.holdout_shards)
 
-    imagenet_train = build_imagenet_input(is_training=True)
-    imagenet_eval = build_imagenet_input(is_training=False)
+    def build_movies_input(is_training):
+
+        return movies_input.MoviesInput(
+            is_training=is_training,
+            data_dir=FLAGS.data_dir,
+            transpose_input=FLAGS.transpose_input,
+            cache=FLAGS.use_cache and is_training,
+            image_size=input_image_size,
+            num_parallel_calls=FLAGS.num_parallel_calls,
+            use_bfloat16=FLAGS.use_bfloat16,
+            num_label_classes=FLAGS.num_label_classes,
+            include_background_label=include_background_label,
+            augment_name=FLAGS.augment_name,
+            mixup_alpha=FLAGS.mixup_alpha,
+            randaug_num_layers=FLAGS.randaug_num_layers,
+            randaug_magnitude=FLAGS.randaug_magnitude,
+            resize_method=resize_method,
+            holdout_shards=FLAGS.holdout_shards)
+
+    # imagenet_train = build_imagenet_input(is_training=True)
+    # imagenet_eval = build_imagenet_input(is_training=False)
+
+    imagenet_train = build_movies_input(is_training=True)
+    imagenet_eval = build_movies_input(is_training=False)
 
     if FLAGS.mode == 'eval':
         eval_steps = FLAGS.num_eval_images // FLAGS.eval_batch_size

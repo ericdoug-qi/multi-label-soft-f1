@@ -421,7 +421,8 @@ class ImageNetInput(ImageNetTFExampleInput):
         # Read the data from disk in parallel
         dataset = dataset.interleave(
             fetch_dataset, cycle_length=self.num_parallel_calls,
-            num_parallel_calls=self.num_parallel_calls, deterministic=False)
+            num_parallel_calls=self.num_parallel_calls,
+            deterministic=False)
 
         if self.cache:
             dataset = dataset.cache().shuffle(1024 * 16).repeat()

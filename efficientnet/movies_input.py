@@ -22,11 +22,17 @@ from __future__ import absolute_import
 import os
 
 # third packages
-import tensorflow as tf
-
+from absl import logging
+import six
+import tensorflow.compat.v1 as tf
+import pandas as pd
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.model_selection import train_test_split
+import preprocessing
 
 # my packages
 from imagenet_input import ImageNetTFExampleInput
+
 
 class MoviesInput(ImageNetTFExampleInput):
 
@@ -111,7 +117,61 @@ class MoviesInput(ImageNetTFExampleInput):
         """See base class."""
         if not self.data_dir:
             return value, tf.constant(0., tf.float32, (1000,))
-        return super(ImageNetInput, self).dataset_parser(value)
+        return super(MoviesInput, self).dataset_parser(value)
+
+    def parse_function(self, filename, label):
+        """Function that returns a tuple of normalized image array and labels array.
+        Args:
+            filename: string representing path to image
+            label: 0/1 one-dimensional array of size N_LABELS
+        """
+        # Read an image from a file
+        image_string = tf.io.read_file(filename)
+        # Decode it into a dense vector
+        image_decoded = tf.image.decode_jpeg(image_string, channels=3)
+        # Resize it to fixed shape
+        image_resized = tf.image.resize(image_decoded, [self.image_size, self.image_size])
+        # Normalize it from [0, 255] to [0.0, 1.0]
+        image_normalized = image_resized / 255.0
+        # return image_normalized, label
+        new_features = {'feature': image_normalized}
+        new_label = {'label': label}
+        return new_features, new_label
+
+    def create_dataset(self, filenames, labels, batch_size, current_host, num_hosts, is_training=True):
+        """Load and parse dataset.
+        Args:
+            filenames: list of image paths
+            labels: numpy array of shape (BATCH_SIZE, N_LABELS)
+            is_training: boolean to indicate training mode
+        """
+
+        # Create a first dataset of file paths and labels
+        dataset = tf.data.Dataset.from_tensor_slices((filenames, labels))
+
+        dataset = dataset.shard(num_hosts, current_host)
+
+        # Parse and preprocess observations in parallel
+        dataset = dataset.map(self.parse_function, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+        if is_training:
+            if self.cache:
+                # This is a small dataset, only load it once, and keep it in memory.
+                dataset = dataset.cache()
+                # Shuffle the data each buffer size
+                dataset = dataset.shuffle(buffer_size=16 * 1024, seed=44)
+            else:
+                dataset = dataset.shuffle(16 * 1024, seed=44)
+
+        # Batch the data for multiple steps
+        dataset = dataset.batch(batch_size, drop_remainder=True)
+        # Fetch batches in the background while the model is training.
+        dataset = dataset.prefetch(1)
+
+        options = tf.data.Options()
+        options.experimental_optimization.autotune = True
+
+        return dataset.with_options(options)
 
     def make_source_dataset(self, index, num_hosts):
         """See base class."""
@@ -163,3 +223,44 @@ class MoviesInput(ImageNetTFExampleInput):
             dataset = dataset.shuffle(1024)
         return dataset
 
+    def input_fn(self, params):
+
+        batch_size = params['batch_size']
+
+        if 'context' in params:
+            current_host = params['context'].current_input_fn_deployment()[1]
+            num_hosts = params['context'].num_hosts
+        else:
+            current_host = 0
+            num_hosts = 1
+
+        logging.info("load movie datas")
+        movies = pd.read_csv(os.path.join(self.data_dir, 'movies.csv'))
+        label_freq = movies['Genre'].apply(lambda s: str(s).split('|')).explode().value_counts().sort_values(
+            ascending=False)
+        rare = list(label_freq[label_freq < 1000].index)
+        movies['Genre'] = movies['Genre'].apply(lambda s: [l for l in str(s).split('|') if l not in rare])
+        X_train, X_val, y_train, y_val = train_test_split(movies['imdbId'], movies['Genre'], test_size=0.2,
+                                                          random_state=44)
+        X_train = [os.path.join(self.data_dir, 'movie_poster/images', str(f) + '.jpg') for f in X_train]
+        X_val = [os.path.join(self.data_dir, 'movie_poster/images', str(f) + '.jpg') for f in X_val]
+
+        y_train = list(y_train)
+        y_val = list(y_val)
+
+        # X = [os.path.join(self.data_dir, 'movie_poster/images', str(f) + '.jpg') for f in movies['imdbId']]
+        # y = movies['Genre']
+
+        # y = list(y)
+
+        mlb = MultiLabelBinarizer()
+        # mlb.fit(y)
+        # y_bin = mlb.transform(y)
+        mlb.fit(y_train)
+        y_train_bin = mlb.transform(y_train)
+        y_val_bin = mlb.transform(y_val)
+
+        if self.is_training:
+            return self.create_dataset(X_train, y_train_bin, batch_size, current_host, num_hosts, self.is_training)
+        else:
+            return self.create_dataset(X_val, y_val_bin, batch_size, current_host, num_hosts, self.is_training)
