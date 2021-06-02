@@ -112,7 +112,7 @@ def build_model(images,
                 fine_tuning=False,
                 features_only=False,
                 pooled_features_only=False,
-                n_labels=None):
+                n_labels=18):
     """A helper function to create a model and return predicted logits.
 
     Args:

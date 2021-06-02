@@ -202,7 +202,7 @@ flags.DEFINE_string(
           ' CPU or TPU, channels_last should be used. For GPU, channels_first'
           ' will improve performance.'))
 flags.DEFINE_integer(
-    'num_label_classes', default=1000, help='Number of classes, at least 2')
+    'num_label_classes', default=18, help='Number of classes, at least 2')
 
 flags.DEFINE_float(
     'batch_norm_momentum',
@@ -393,9 +393,14 @@ def model_fn(features, labels, mode, params):
         logits = build_model()
 
     if mode == tf.estimator.ModeKeys.PREDICT:
+        # modified by liuxiaodong on 2021-06-02
+        # predictions = {
+        #     'classes': tf.argmax(logits, axis=1),
+        #     'probabilities': tf.nn.softmax(logits, name='softmax_tensor')
+        # }
         predictions = {
-            'classes': tf.argmax(logits, axis=1),
-            'probabilities': tf.nn.softmax(logits, name='softmax_tensor')
+            'classes': tf.cast(tf.greater(logits, 0.5), tf.float32),
+            'probabilities': tf.nn.sigmoid_cross_entropy_with_logits(logits, name='sigmoid_tensor')
         }
         return tf.estimator.EstimatorSpec(
             mode=mode,
@@ -409,13 +414,24 @@ def model_fn(features, labels, mode, params):
     batch_size = params['batch_size']  # pylint: disable=unused-variable
 
     # Calculate loss, which includes softmax cross entropy and L2 regularization.
-    cross_entropy = tf.losses.softmax_cross_entropy(
-        logits=logits,
-        onehot_labels=labels,
-        label_smoothing=FLAGS.label_smoothing)
+    # modified by liuxiaodong on 2021-06-02
+    # cross_entropy = tf.losses.softmax_cross_entropy(
+    #     logits=logits,
+    #     onehot_labels=labels,
+    #     label_smoothing=FLAGS.label_smoothing)
+
+    binary_entropy = tf.keras.metrics.binary_crossentropy(
+        y_true=labels,
+        y_pred=logits,
+        label_smoothing=FLAGS.label_smoothing
+    )
 
     # Add weight decay to the loss for non-batch-normalization variables.
-    loss = cross_entropy + FLAGS.weight_decay * tf.add_n(
+    # modified by liuxiaodong on 2021-06-02
+    # loss = cross_entropy + FLAGS.weight_decay * tf.add_n(
+    #     [tf.nn.l2_loss(v) for v in tf.trainable_variables()
+    #      if 'batch_normalization' not in v.name])
+    loss = binary_entropy + FLAGS.weight_decay * tf.add_n(
         [tf.nn.l2_loss(v) for v in tf.trainable_variables()
          if 'batch_normalization' not in v.name])
 
